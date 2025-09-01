@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pet Collector — Create & Play</title>
+<style>
+:root{--bg:#fff;--muted:#666;--accent:#0b67ff}
+*{box-sizing:border-box}body{font-family:sans-serif;background:var(--bg);margin:0;padding:18px;color:#111}
+header{display:flex;gap:8px;align-items:center;margin-bottom:14px}
+h1{font-size:18px;margin:0}
+.btn{padding:6px 10px;border-radius:8px;border:1px solid #ccc;background:#f5f5f5;cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff;border:0}
+.container{display:grid;grid-template-columns:360px 1fr;gap:16px}
+.card{border:1px solid #ddd;border-radius:8px;padding:12px;background:#fff}
+label{display:block;font-size:13px;margin:6px 0;color:var(--muted)}
+.small{font-size:12px;color:var(--muted)}.muted{color:var(--muted)}.row{display:flex;gap:6px;align-items:center}
+.inv-item,.egg-item,.pet-item,.acct-item{border:1px dashed #ccc;padding:6px;border-radius:6px;margin:4px 0;background:#fbfbff}
+.trade-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}
+.trade-slot{border:1px dashed #ccc;height:60px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;background:#fafafa}
+.trade-slot.filled{background:#eaf3ff;font-weight:600}
+#modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center}
+#modal>div{background:#fff;padding:12px;border-radius:8px;max-width:720px;width:100%;max-height:80%;overflow:auto}
+.inv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;max-height:260px;overflow:auto;padding:6px}
+.inv-card{border:1px solid #e6e6e6;border-radius:10px;padding:10px;background:#fbfbff;display:flex;flex-direction:column;gap:6px;min-height:100px}
+/* Shop card styles */
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.shop-card{border:1px solid #e6e6e6;border-radius:10px;padding:10px;background:#fff;display:flex;flex-direction:column;gap:8px;min-height:120px}
+.shop-card h4{margin:0}
+.pet-line{font-size:13px;color:var(--muted)}
+.visibility-badge{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid #ddd}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pet Collector</h1>
+  <div class="row" style="margin-left:auto">
+    <button id="bCreate" class="btn">Create</button>
+    <button id="bPlay" class="btn">Play</button>
+    <button id="bTrade" class="btn">Trade</button>
+  </div>
+</header>
+<main class="container"><section class="card" id="L"></section><section class="card" id="R"></section></main>
+<div id="modal"><div><h3 id="modalTitle"></h3><div id="modalBody"></div><div class="row" style="justify-content:end;margin-top:8px"><button id="modalClose" class="btn">Cancel</button></div></div></div>
+<script>
+// Storage
+const S_EGGS = 'petgame_eggs';
+const S_ACCTS = 'petgame_accounts';
+
+// DOM refs
+const L = document.getElementById('L');
+const R = document.getElementById('R');
+const bCreate = document.getElementById('bCreate');
+const bPlay = document.getElementById('bPlay');
+const bTrade = document.getElementById('bTrade');
+const M = document.getElementById('modal');
+const MT = document.getElementById('modalTitle');
+const MB = document.getElementById('modalBody');
+const MClose = document.getElementById('modalClose');
+
+function load(k){ try{ return JSON.parse(localStorage.getItem(k)||'[]') }catch{return []} }
+function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
+
+let eggs = load(S_EGGS);
+let accounts = load(S_ACCTS);
+let mode = 'create';
+let selectedEggId = null;
+let selectedAccountId = null;
+let trade = {acc1:null,acc2:null,slots1:Array(9).fill(null),slots2:Array(9).fill(null)};
+let inventoryScroll = {};
+
+function uid(p='id'){ return p+'_'+Date.now().toString(36)+'_'+Math.floor(Math.random()*9000); }
+function esc(s){ if(!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function createBtn(text,cls,fn){ const b=document.createElement('button'); b.className='btn '+(cls||''); b.textContent=text; b.addEventListener('click',fn); return b }
+
+function openModal(title,nodes){ MT.textContent = title; MB.innerHTML=''; nodes.forEach(n=>MB.appendChild(n)); M.style.display='flex'; }
+function closeModal(){ M.style.display='none'; MB.innerHTML=''; }
+MClose.addEventListener('click', closeModal);
+
+function render(){ bCreate.classList.toggle('primary', mode==='create'); bPlay.classList.toggle('primary', mode==='play'); bTrade.classList.toggle('primary', mode==='trade');
+ if(mode==='create'){ renderCreate(); }
+ else if(mode==='play'){ renderPlay(); }
+ else if(mode==='trade'){ renderTrade(); }
+}
+
+// Create
+function renderCreate(){
+  L.innerHTML=''; R.innerHTML='';
+  const h=document.createElement('h3'); h.textContent='Create Mode'; L.appendChild(h);
+  // Egg inputs with labels
+  const lblEggName = document.createElement('label'); lblEggName.textContent = 'Egg name';
+  const eggName = document.createElement('input'); eggName.placeholder='Mystic Egg';
+  const lblEggPrice = document.createElement('label'); lblEggPrice.textContent = 'Egg price (coins)';
+  const eggPrice = document.createElement('input'); eggPrice.type='number'; eggPrice.value=100;
+  L.appendChild(lblEggName); L.appendChild(eggName); L.appendChild(lblEggPrice); L.appendChild(eggPrice);
+  const row=document.createElement('div'); row.className='row'; row.style.marginTop='8px';
+  row.appendChild(createBtn('Add Egg','primary', ()=>{ const name=eggName.value.trim(); const price=Number(eggPrice.value)||0; if(!name){ alert('Enter an egg name'); return } const e={id:uid('egg'),name,price,pets:[],visible:true}; eggs.push(e); save(S_EGGS,eggs); selectedEggId=e.id; render(); }));
+  row.appendChild(createBtn('Export eggs JSON','', ()=>{ prompt('Eggs JSON', JSON.stringify(eggs,null,2)); }));
+  L.appendChild(row);
+
+  const listTitle = document.createElement('h4'); listTitle.textContent='Your Eggs'; L.appendChild(listTitle);
+  const list = document.createElement('div'); list.id='eggsList';
+  if(eggs.length===0){ list.innerHTML='<div class="muted">No eggs yet. Add one above.</div>'; }
+  else{
+    eggs.forEach(egg=>{
+      // treat undefined visible as true for backwards compatibility
+      if(egg.visible === undefined) egg.visible = true;
+      const el = document.createElement('div'); el.className='egg-item row'; el.style.justifyContent='space-between';
+      const left = document.createElement('div'); left.style.flex='1'; left.innerHTML = `<strong>${esc(egg.name)}</strong><div class="small">Price: ${egg.price} coins — Pets: ${egg.pets.length}</div>`;
+      const controls = document.createElement('div'); controls.className='row';
+      controls.appendChild(createBtn('Edit','', ()=>{ selectedEggId=egg.id; render(); }));
+      controls.appendChild(createBtn('Delete','', ()=>{ if(confirm('Delete egg and its pets?')){ eggs=eggs.filter(e=>e.id!==egg.id); save(S_EGGS,eggs); if(selectedEggId===egg.id) selectedEggId=null; render(); } }));
+      // visibility toggle button
+      const visBtn = createBtn(egg.visible? 'Visible':'Hidden','', ()=>{ egg.visible = !egg.visible; save(S_EGGS, eggs); render(); });
+      controls.appendChild(visBtn);
+      el.appendChild(left); el.appendChild(controls); list.appendChild(el);
+    });
+  }
+  L.appendChild(list);
+
+  if(selectedEggId){ const egg = eggs.find(e=>e.id===selectedEggId); if(egg) renderEggEditor(egg); else { selectedEggId=null; R.innerHTML='<div class="muted">Select an egg to edit</div>'; } }
+  else{ R.innerHTML='<div class="muted">Select an egg to view or edit its pets.</div>'; }
+}
+
+function renderEggEditor(egg){ R.innerHTML=''; const h=document.createElement('h3'); h.textContent = 'Editing: '+egg.name; R.appendChild(h);
+  const lblPrice = document.createElement('label'); lblPrice.textContent='Egg price'; const inPrice = document.createElement('input'); inPrice.type='number'; inPrice.value=egg.price; R.appendChild(lblPrice); R.appendChild(inPrice);
+  const visRow = document.createElement('div'); visRow.className='row'; visRow.style.marginTop='6px'; const visLabel = document.createElement('label'); visLabel.textContent='Visible in shop'; visRow.appendChild(visLabel); const visToggle = createBtn(egg.visible? 'Visible':'Hidden','', ()=>{ egg.visible = !egg.visible; save(S_EGGS, eggs); render(); }); visRow.appendChild(visToggle); R.appendChild(visRow);
+  const row = document.createElement('div'); row.className='row'; row.style.marginTop='8px'; row.appendChild(createBtn('Save Egg','primary', ()=>{ egg.price=Number(inPrice.value)||0; save(S_EGGS,eggs); render(); })); row.appendChild(createBtn('Back to eggs','', ()=>{ selectedEggId=null; render(); })); R.appendChild(row);
+
+  const petsTitle = document.createElement('h4'); petsTitle.textContent = "Pets in this egg (order doesn't matter)"; R.appendChild(petsTitle);
+  const petList = document.createElement('div'); petList.id='petList'; R.appendChild(petList);
+  if(!egg.pets || egg.pets.length===0){ petList.innerHTML='<div class="muted">No pets yet. Add one below.</div>'; }
+  else{ egg.pets.forEach(p=>{ const d=document.createElement('div'); d.className='pet-item'; d.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><div style="flex:1"><strong>${esc(p.name)}</strong> <span class="small">(${esc(p.rarityText)} — ${p.rarityPct}%)</span><div class="small muted">Weight: ${p.weightMin}kg - ${p.weightMax}kg • Money/tap: ${p.moneyPerTap}</div><div class="small">Gold: ${p.goldPct||0}% • Rainbow: ${p.rainbowPct||0}%</div><div class="small">${esc(p.description||'')}</div></div></div>`; const controls=document.createElement('div'); controls.className='inline-controls'; controls.appendChild(createBtn('Edit','', ()=>{ showPetEditModal(egg,p); })); controls.appendChild(createBtn('Delete','', ()=>{ if(confirm('Delete this pet?')){ egg.pets = egg.pets.filter(x=>x.id!==p.id); save(S_EGGS,eggs); render(); } })); d.appendChild(controls); petList.appendChild(d); }); }
+
+  const addTitle = document.createElement('h4'); addTitle.textContent='Add a new Pet to this egg'; R.appendChild(addTitle);
+  // Add pet inputs with labels (no default numbers — placeholders instead)
+  const f = {};
+  f.name = document.createElement('input'); f.name.placeholder='Pet name';
+  const lblName = document.createElement('label'); lblName.textContent='Name'; R.appendChild(lblName); R.appendChild(f.name);
+
+  f.rtext = document.createElement('input'); f.rtext.placeholder='Rarity text (e.g. Rare)'; const lblRtext = document.createElement('label'); lblRtext.textContent='Rarity text'; R.appendChild(lblRtext); R.appendChild(f.rtext);
+
+  f.rpct = document.createElement('input'); f.rpct.type='number'; f.rpct.placeholder='Rarity percentage (0-100)'; const lblRpct = document.createElement('label'); lblRpct.textContent='Rarity percentage (0-100)'; R.appendChild(lblRpct); R.appendChild(f.rpct);
+
+  f.desc = document.createElement('textarea'); f.desc.placeholder='A short description'; const lblDesc = document.createElement('label'); lblDesc.textContent='Description'; R.appendChild(lblDesc); R.appendChild(f.desc);
+
+  f.wmin = document.createElement('input'); f.wmin.type='number'; f.wmin.step='0.1'; f.wmin.placeholder='Weight min (kg)'; const lblWmin = document.createElement('label'); lblWmin.textContent='Weight min (kg)'; R.appendChild(lblWmin); R.appendChild(f.wmin);
+
+  f.wmax = document.createElement('input'); f.wmax.type='number'; f.wmax.step='0.1'; f.wmax.placeholder='Weight max (kg)'; const lblWmax = document.createElement('label'); lblWmax.textContent='Weight max (kg)'; R.appendChild(lblWmax); R.appendChild(f.wmax);
+
+  f.mpt = document.createElement('input'); f.mpt.type='number'; f.mpt.step='0.01'; f.mpt.placeholder='Money earn per tap (baseline)'; const lblMpt = document.createElement('label'); lblMpt.textContent='Money earn per tap (baseline)'; R.appendChild(lblMpt); R.appendChild(f.mpt);
+
+  // NEW: variant chances
+  f.gold = document.createElement('input'); f.gold.type='number'; f.gold.placeholder='Gold chance %'; const lblGold = document.createElement('label'); lblGold.textContent='Gold chance (%)'; R.appendChild(lblGold); R.appendChild(f.gold);
+  f.rainbow = document.createElement('input'); f.rainbow.type='number'; f.rainbow.placeholder='Rainbow chance %'; const lblRainbow = document.createElement('label'); lblRainbow.textContent='Rainbow chance (%)'; R.appendChild(lblRainbow); R.appendChild(f.rainbow);
+
+  R.appendChild(createBtn('Add Pet','primary', ()=>{ const name=f.name.value.trim(); const rtext=f.rtext.value.trim()||'Common'; const rpct=Number(f.rpct.value)||0; const descr=f.desc.value.trim(); const wmin=Number(f.wmin.value)||0; const wmax=Number(f.wmax.value)||0; const mpt=Number(f.mpt.value)||0; const goldPct = Number(f.gold.value)||0; const rainbowPct = Number(f.rainbow.value)||0; if(!name){ alert('Enter pet name'); return } if(wmax < wmin){ alert('Weight max must be >= min'); return } const otherTotal = (egg.pets||[]).reduce((s,p)=>s+(p.rarityPct||0),0); if(otherTotal + rpct > 100){ if(!confirm('Total rarity percentages in this egg will exceed 100%. Continue?')) return } const p = { id: uid('pet'), name, rarityText: rtext, rarityPct: rpct, description: descr, weightMin: wmin, weightMax: wmax, moneyPerTap: mpt, goldPct: goldPct, rainbowPct: rainbowPct }; egg.pets.push(p); save(S_EGGS, eggs); render(); }));
+}
+
+function showPetEditModal(egg, pet){ const cont = document.createElement('div'); cont.innerHTML = '<h4>Edit Pet</h4>';
+ const inName=document.createElement('input'); inName.value=pet.name; cont.appendChild(document.createTextNode('Name')); cont.appendChild(inName); cont.appendChild(document.createElement('br'));
+ const inRtext=document.createElement('input'); inRtext.value=pet.rarityText; cont.appendChild(document.createTextNode('Rarity text')); cont.appendChild(inRtext); cont.appendChild(document.createElement('br'));
+ const inRp=document.createElement('input'); inRp.type='number'; inRp.value=pet.rarityPct; cont.appendChild(document.createTextNode('Rarity %')); cont.appendChild(inRp); cont.appendChild(document.createElement('br'));
+ const inDesc=document.createElement('textarea'); inDesc.value=pet.description; cont.appendChild(document.createTextNode('Description')); cont.appendChild(inDesc); cont.appendChild(document.createElement('br'));
+ const inWmin=document.createElement('input'); inWmin.type='number'; inWmin.step='0.1'; inWmin.value=pet.weightMin; cont.appendChild(document.createTextNode('Weight min')); cont.appendChild(inWmin); cont.appendChild(document.createElement('br'));
+ const inWmax=document.createElement('input'); inWmax.type='number'; inWmax.step='0.1'; inWmax.value=pet.weightMax; cont.appendChild(document.createTextNode('Weight max')); cont.appendChild(inWmax); cont.appendChild(document.createElement('br'));
+ const inMpt=document.createElement('input'); inMpt.type='number'; inMpt.step='0.01'; inMpt.value=pet.moneyPerTap; cont.appendChild(document.createTextNode('Money per tap')); cont.appendChild(inMpt); cont.appendChild(document.createElement('br'));
+ // variant edit
+ const inGold=document.createElement('input'); inGold.type='number'; inGold.value=pet.goldPct||0; cont.appendChild(document.createTextNode('Gold chance (%)')); cont.appendChild(inGold); cont.appendChild(document.createElement('br'));
+ const inRainbow=document.createElement('input'); inRainbow.type='number'; inRainbow.value=pet.rainbowPct||0; cont.appendChild(document.createTextNode('Rainbow chance (%)')); cont.appendChild(inRainbow); cont.appendChild(document.createElement('br'));
+ const saveBtn = createBtn('Save Pet','primary', ()=>{ pet.name = inName.value.trim() || pet.name; pet.rarityText = inRtext.value.trim() || pet.rarityText; pet.rarityPct = Number(inRp.value)||0; pet.description = inDesc.value.trim(); pet.weightMin = Number(inWmin.value)||0; pet.weightMax = Number(inWmax.value)||0; pet.moneyPerTap = Number(inMpt.value)||0; pet.goldPct = Number(inGold.value)||0; pet.rainbowPct = Number(inRainbow.value)||0; save(S_EGGS, eggs); closeModal(); render(); });
+ const cancelBtn = createBtn('Cancel','', ()=>{ closeModal(); }); cont.appendChild(saveBtn); cont.appendChild(cancelBtn); openModal('Edit Pet', [cont]); }
+
+// Play Mode
+function renderPlay(){
+  L.innerHTML='';
+  const h=document.createElement('h3'); h.textContent='Play Mode'; L.appendChild(h);
+  const nameIn=document.createElement('input'); nameIn.placeholder='Player name';
+  const moneyIn=document.createElement('input'); moneyIn.type='number'; moneyIn.value=100;
+  L.appendChild(document.createElement('label')).textContent='Create Save (Account) name'; L.appendChild(nameIn);
+  L.appendChild(document.createElement('label')).textContent='Starting money'; L.appendChild(moneyIn);
+  const row=document.createElement('div'); row.className='row'; row.style.marginTop='8px'; row.appendChild(createBtn('Create Account','primary', ()=>{ const name=nameIn.value.trim(); const money=Number(moneyIn.value)||0; if(!name){ alert('Enter an account name'); return } const a={id:uid('acc'),name,money,inventory:[],equippedPetId:null}; accounts.push(a); save(S_ACCTS,accounts); selectedAccountId=a.id; render(); }));
+  row.appendChild(createBtn('Import accounts JSON','', ()=>{ const raw=prompt('Paste accounts JSON'); try{ const imported=JSON.parse(raw||'[]'); accounts=imported; save(S_ACCTS,accounts); render(); }catch(e){ alert('Invalid JSON') } })); L.appendChild(row);
+  const listTitle=document.createElement('h4'); listTitle.textContent='Your Accounts'; L.appendChild(listTitle);
+  const list=document.createElement('div'); accounts.forEach(a=>{ const d=document.createElement('div'); d.className='acct-item row'; if(a.id===selectedAccountId) d.style.outline='2px solid rgba(11,103,255,0.12)'; d.innerHTML=`<div style="flex:1"><strong>${esc(a.name)}</strong><div class="small muted">Money: ${Number(a.money).toFixed(2)} • Pets: ${a.inventory.length}</div></div>`; const controls=document.createElement('div'); controls.className='row'; controls.appendChild(createBtn('Play','', ()=>{ selectedAccountId=a.id; render(); })); controls.appendChild(createBtn('Delete','', ()=>{ if(confirm('Delete this account?')){ accounts=accounts.filter(x=>x.id!==a.id); save(S_ACCTS,accounts); if(selectedAccountId===a.id) selectedAccountId=null; render(); } })); d.appendChild(controls); list.appendChild(d); }); L.appendChild(list);
+  if(selectedAccountId){ const acc = accounts.find(a=>a.id===selectedAccountId); if(acc) renderPlayArea(acc); else { selectedAccountId=null; R.innerHTML='<div class="muted">Select an account to play.</div>'; } }
+  else { R.innerHTML='<div class="muted">Select an account to play.</div>'; }
+}
+
+function renderPlayArea(account){ R.innerHTML=''; const h=document.createElement('h3'); h.innerHTML = `Playing: ${esc(account.name)} <span class="badge right">${Number(account.money).toFixed(2)} coins</span>`; R.appendChild(h);
+  // shop - now a popup with cards
+  const shopLabel=document.createElement('label'); shopLabel.textContent='Shop'; R.appendChild(shopLabel);
+  R.appendChild(createBtn('Open Shop','primary', ()=>{ openShopModal(account); }));
+
+  // money edit
+  const moneyRow=document.createElement('div'); moneyRow.className='row'; const moneyInput=document.createElement('input'); moneyInput.type='number'; moneyInput.step='0.01'; moneyInput.placeholder='Amount'; moneyInput.style.width='120px'; moneyRow.appendChild(moneyInput);
+  moneyRow.appendChild(createBtn('Add Money','', ()=>{ const amt=Number(moneyInput.value)||0; if(amt===0) return; const curGrid = document.querySelector('.inv-grid'); if(curGrid) inventoryScroll[account.id] = curGrid.scrollTop || 0; account.money += amt; save(S_ACCTS,accounts); render(); }));
+  moneyRow.appendChild(createBtn('Subtract Money','', ()=>{ const amt=Number(moneyInput.value)||0; if(amt===0) return; const curGrid = document.querySelector('.inv-grid'); if(curGrid) inventoryScroll[account.id] = curGrid.scrollTop || 0; account.money -= amt; save(S_ACCTS,accounts); render(); }));
+  R.appendChild(moneyRow);
+
+  // inventory grid
+  const invTitle=document.createElement('h4'); invTitle.textContent='Inventory'; R.appendChild(invTitle);
+  const invGrid=document.createElement('div'); invGrid.className='inv-grid';
+  if(!account.inventory || account.inventory.length===0){ invGrid.innerHTML='<div class="muted">No pets in inventory.</div>'; }
+  else{ account.inventory.forEach(p=>{ const card=document.createElement('div'); card.className='inv-card'; const title=document.createElement('div'); title.innerHTML=`<strong>${esc(p.name)}</strong>`; const meta=document.createElement('div'); meta.className='small muted'; meta.textContent = `${p.rarityText} • ${p.weight}kg`; const desc=document.createElement('div'); desc.className='small'; desc.textContent = p.description||''; const controls=document.createElement('div'); controls.className='controls'; const equipBtn=createBtn(account.equippedPetId===p.instanceId?'Equipped':'Equip','', ()=>{ account.equippedPetId = p.instanceId; save(S_ACCTS,accounts); render(); }); const delBtn=createBtn('Delete','', ()=>{ if(confirm('Delete this pet from inventory?')){ account.inventory = account.inventory.filter(x=>x.instanceId!==p.instanceId); if(account.equippedPetId===p.instanceId) account.equippedPetId=null; save(S_ACCTS,accounts); render(); } }); controls.appendChild(equipBtn); controls.appendChild(delBtn); card.appendChild(title); card.appendChild(meta); card.appendChild(desc); card.appendChild(controls); invGrid.appendChild(card); }); }
+  R.appendChild(invGrid);
+  if(inventoryScroll[account.id]){ try{ invGrid.scrollTop = inventoryScroll[account.id]; }catch(e){}
+
+  }
+
+  // actions
+  const actTitle=document.createElement('h4'); actTitle.textContent='Actions'; R.appendChild(actTitle);
+  R.appendChild(createBtn('Earn Coins (tap)','primary', ()=>{ const earned = doEarn(account); if(earned<=0){ alert('No pet equipped. Equip a pet to earn coins.') } else { account.money += earned; save(S_ACCTS,accounts); const curGrid = document.querySelector('.inv-grid'); if(curGrid) inventoryScroll[account.id] = curGrid.scrollTop || 0; render(); alert('Earned ' + earned.toFixed(2) + ' coins') } }));
+  R.appendChild(createBtn('Save Account','', ()=>{ save(S_ACCTS,accounts); alert('Account saved'); }));
+}
+
+// Shop modal: show visible eggs as cards and their possible pets (name, rarity, chance)
+function openShopModal(account){ const visibleEggs = eggs.filter(e => (e.visible === undefined ? true : e.visible)); const cont = document.createElement('div'); if(visibleEggs.length===0){ cont.innerHTML = '<div class="muted">No eggs are available in the shop. Toggle eggs to Visible in Create mode.</div>'; openModal('Shop', [cont]); return; }
+  const grid = document.createElement('div'); grid.className = 'shop-grid'; visibleEggs.forEach(egg =>{
+    const card = document.createElement('div'); card.className = 'shop-card';
+    const h = document.createElement('h4'); h.textContent = `${egg.name} — ${egg.price} coins`; card.appendChild(h);
+    const vis = document.createElement('div'); vis.className='visibility-badge'; vis.textContent = egg.visible? 'Visible' : 'Hidden'; card.appendChild(vis);
+    const petList = document.createElement('div'); petList.style.flex='1';
+    if(!egg.pets || egg.pets.length===0){ petList.innerHTML = '<div class="muted">No pets inside this egg.</div>'; }
+    else{
+      egg.pets.forEach(p=>{ const pdiv = document.createElement('div'); pdiv.className='pet-line'; pdiv.textContent = `${p.name} — ${p.rarityText} — ${p.rarityPct || 0}%`; petList.appendChild(pdiv); });
+    }
+    card.appendChild(petList);
+    const btnRow = document.createElement('div'); btnRow.className='row';
+    const buyBtn = createBtn('Buy','primary', ()=>{
+      if(account.money < egg.price){ alert('Not enough coins'); return }
+      if(!egg.pets || egg.pets.length===0){ alert('This egg has no pets'); return }
+      // perform buy
+      account.money -= egg.price;
+      const resultPet = rollPetFromEgg(egg);
+      const variant = determineVariant(resultPet);
+      const weight = +(resultPet.weightMin + Math.random()*(resultPet.weightMax - resultPet.weightMin)).toFixed(2);
+      const instanceName = resultPet.name + (variant ? (' ('+variant+')') : '');
+      const variantMultiplier = variant === 'gold' ? 2 : variant === 'rainbow' ? 5 : 1;
+      const petInstance = { instanceId: uid('inst'), basePetId: resultPet.id, name: instanceName, baseName: resultPet.name, variant: variant, variantMultiplier: variantMultiplier, rarityText: resultPet.rarityText, rarityPct: resultPet.rarityPct, description: resultPet.description, weight: weight, weightMin: resultPet.weightMin, weightMax: resultPet.weightMax, moneyPerTap: resultPet.moneyPerTap, createdAt: Date.now() };
+      account.inventory.push(petInstance);
+      save(S_ACCTS,accounts);
+      closeModal();
+      render();
+      alert(`You got: ${petInstance.name} (${petInstance.rarityText}) — ${petInstance.weight}kg`);
+    });
+    btnRow.appendChild(buyBtn);
+    const infoBtn = createBtn('Details','', ()=>{ // show larger details for this egg
+      const details = document.createElement('div'); details.innerHTML = `<h4>${esc(egg.name)}</h4><div class="small muted">Price: ${egg.price} coins</div>`;
+      const list = document.createElement('div'); if(!egg.pets||egg.pets.length===0) list.innerHTML='<div class="muted">No pets</div>'; else egg.pets.forEach(p=>{ const r = document.createElement('div'); r.className='pet-line'; r.textContent = `${p.name} — ${p.rarityText} — ${p.rarityPct||0}%`; list.appendChild(r); });
+      details.appendChild(list);
+      openModal('Egg details', [details]);
+    });
+    btnRow.appendChild(infoBtn);
+    card.appendChild(btnRow);
+    grid.appendChild(card);
+  });
+  cont.appendChild(grid);
+  openModal('Shop', [cont]);
+}
+
+// Mechanics
+function rollPetFromEgg(egg){ const total = egg.pets.reduce((s,p)=>s+(p.rarityPct||0),0); let roll = Math.random()*100; if(total<=0) return egg.pets[Math.floor(Math.random()*egg.pets.length)]; for(let p of egg.pets){ if(roll < p.rarityPct) return p; roll -= p.rarityPct; } return egg.pets[Math.floor(Math.random()*egg.pets.length)]; }
+
+function determineVariant(basePet){ // exclusive: check rainbow first, then gold
+  if((basePet.rainbowPct||0) > 0){ if(Math.random()*100 < basePet.rainbowPct) return 'rainbow'; }
+  if((basePet.goldPct||0) > 0){ if(Math.random()*100 < basePet.goldPct) return 'gold'; }
+  return null;
+}
+
+function doEarn(account){ const pet = account.inventory.find(p=>p.instanceId===account.equippedPetId); if(!pet) return 0; const base = Number(pet.moneyPerTap) || 0; const minW = Number(pet.weightMin) || 0; const w = Number(pet.weight) || minW; const extraKgs = Math.floor(Math.max(0, w - minW)); const weightMultiplier = 1 + (0.10 * extraKgs); const variantMultiplier = Number(pet.variantMultiplier) || (pet.variant==='gold'?2: pet.variant==='rainbow'?5:1); return +(base * weightMultiplier * variantMultiplier).toFixed(02); }
+
+// Trade
+function renderTrade(){ L.innerHTML=''; const h=document.createElement('h3'); h.textContent='Trading Mode'; L.appendChild(h); const sel1=document.createElement('select'); sel1.id='tradeAcc1'; sel1.innerHTML = '<option value="">-- Select --</option>' + accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join(''); const sel2=document.createElement('select'); sel2.id='tradeAcc2'; sel2.innerHTML = '<option value="">-- Select --</option>' + accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join(''); L.appendChild(sel1); L.appendChild(sel2); L.appendChild(createBtn('Start Trade','primary', ()=>{ startTrade(); })); R.innerHTML='<div class="muted">Choose two accounts and press Start Trade.</div>'; }
+
+function startTrade(){ const sel1 = document.getElementById('tradeAcc1'); const sel2 = document.getElementById('tradeAcc2'); if(!sel1||!sel2){ alert('Trade selectors not found'); return } const a1 = accounts.find(x=>x.id===sel1.value); const a2 = accounts.find(x=>x.id===sel2.value); if(!a1||!a2||a1.id===a2.id){ alert('Choose two different accounts'); return } trade = { acc1:a1.id, acc2:a2.id, slots1:Array(9).fill(null), slots2:Array(9).fill(null) }; drawTradeArea(); }
+
+function drawTradeArea(){ const a1 = accounts.find(x=>x.id===trade.acc1); const a2 = accounts.find(x=>x.id===trade.acc2); if(!a1||!a2){ renderTrade(); return } L.innerHTML = `<h3>Trading: ${esc(a1.name)} ⇄ ${esc(a2.name)}</h3><div class="muted">Place pets in slots, then Accept to trade.</div>`; R.innerHTML=''; const container=document.createElement('div'); container.className='row'; container.style.justifyContent='space-between'; const leftCol=document.createElement('div'); leftCol.style.flex='1'; leftCol.style.marginRight='8px'; leftCol.innerHTML=`<h4>${esc(a1.name)}</h4>`; const grid1=document.createElement('div'); grid1.className='trade-grid'; grid1.id='grid1'; leftCol.appendChild(grid1); leftCol.appendChild(createBtn('Accept','', ()=>{ alert(a1.name+' accepted (client-side)'); })); leftCol.appendChild(createBtn('Decline','', ()=>{ alert(a1.name+' declined'); renderTrade(); })); const rightCol=document.createElement('div'); rightCol.style.flex='1'; rightCol.style.marginLeft='8px'; rightCol.innerHTML=`<h4>${esc(a2.name)}</h4>`; const grid2=document.createElement('div'); grid2.className='trade-grid'; grid2.id='grid2'; rightCol.appendChild(grid2); rightCol.appendChild(createBtn('Accept','', ()=>{ alert(a2.name+' accepted (client-side)'); })); rightCol.appendChild(createBtn('Decline','', ()=>{ alert(a2.name+' declined'); renderTrade(); })); container.appendChild(leftCol); container.appendChild(rightCol); R.appendChild(container);
+  function drawGrid(gridEl, slots, acc){ gridEl.innerHTML=''; slots.forEach((s,idx)=>{ const d=document.createElement('div'); d.className='trade-slot' + (s? ' filled':''); d.textContent = s? s.name : '+'; d.addEventListener('click', ()=>{ if(s){ slots[idx]=null; drawTradeArea(); } else { if(!acc.inventory||acc.inventory.length===0){ alert('This account has no pets in inventory'); return } const usedIds = (trade.slots1.concat(trade.slots2).filter(Boolean)).map(x=>x.instanceId);
+      const nodes = acc.inventory.map(p=>{
+        const div = document.createElement('div');
+        div.className = 'inv-item';
+        const w = (p.weight !== undefined && p.weight !== null) ? (Number(p.weight).toFixed(2)+'kg') : '';
+        div.textContent = `${p.name} (${p.rarityText})${w? ' — '+w : ''}`;
+        const alreadyUsed = usedIds.includes(p.instanceId);
+        if(alreadyUsed){
+          // visually indicate it's already placed in the trade and don't allow selecting it
+          div.style.opacity = '0.5';
+          div.style.cursor = 'not-allowed';
+          const note = document.createElement('div');
+          note.className = 'small muted';
+          note.textContent = 'Already in trade';
+          div.appendChild(note);
+        } else {
+          div.style.cursor = 'pointer';
+          div.addEventListener('click', ()=>{ slots[idx]=p; closeModal(); drawTradeArea(); });
+        }
+        return div;
+      });
+      openModal('Choose a pet to add', nodes); } }); gridEl.appendChild(d); }); }
+  drawGrid(grid1, trade.slots1, a1); drawGrid(grid2, trade.slots2, a2);
+  const finishBtn = createBtn('Finalize Trade','primary', ()=>{ finalizeTrade(); }); R.appendChild(finishBtn); }
+
+function finalizeTrade(){ const a1 = accounts.find(x=>x.id===trade.acc1); const a2= accounts.find(x=>x.id===trade.acc2); if(!a1||!a2) return; const pets1=trade.slots1.filter(Boolean); const pets2=trade.slots2.filter(Boolean); pets1.forEach(p=>{ a1.inventory = a1.inventory.filter(x=>x.instanceId !== p.instanceId); a2.inventory.push(p); }); pets2.forEach(p=>{ a2.inventory = a2.inventory.filter(x=>x.instanceId !== p.instanceId); a1.inventory.push(p); }); save(S_ACCTS, accounts); alert('Trade complete!'); trade = {acc1:null,acc2:null,slots1:Array(9).fill(null),slots2:Array(9).fill(null)}; render(); }
+
+// bindings
+bCreate.addEventListener('click', ()=>{ mode='create'; render(); }); bPlay.addEventListener('click', ()=>{ mode='play'; render(); }); bTrade.addEventListener('click', ()=>{ mode='trade'; render(); });
+
+// init
+render();
+</script>
+</body>
+</html>
